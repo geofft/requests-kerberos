@@ -183,8 +183,7 @@ class HTTPKerberosAuth(AuthBase):
 
         # Set the CBT values populated after the first response
         self.send_cbt = send_cbt
-        self.cbt_binding_tried = False
-        self.cbt_struct = None
+        self._cbts = {}
 
     def generate_request_header(self, response, host, is_preemptive=False):
         """
@@ -221,10 +220,10 @@ class HTTPKerberosAuth(AuthBase):
 
             kerb_stage = "authGSSClientStep()"
             # If this is set pass along the struct to Kerberos
-            if self.cbt_struct:
+            if host in self._cbts:
                 result = kerberos.authGSSClientStep(self.context[host],
                                                     negotiate_resp_value,
-                                                    channel_bindings=self.cbt_struct)
+                                                    channel_bindings=self._cbts[host])
             else:
                 result = kerberos.authGSSClientStep(self.context[host],
                                                     negotiate_resp_value)
@@ -352,10 +351,10 @@ class HTTPKerberosAuth(AuthBase):
 
         try:
             # If this is set pass along the struct to Kerberos
-            if self.cbt_struct:
+            if host in self._cbts:
                 result = kerberos.authGSSClientStep(self.context[host],
                                                     _negotiate_value(response),
-                                                    channel_bindings=self.cbt_struct)
+                                                    channel_bindings=self._cbts[host])
             else:
                 result = kerberos.authGSSClientStep(self.context[host],
                                                     _negotiate_value(response))
@@ -376,18 +375,21 @@ class HTTPKerberosAuth(AuthBase):
         num_401s = kwargs.pop('num_401s', 0)
 
         # Check if we have already tried to get the CBT data value
-        if not self.cbt_binding_tried and self.send_cbt:
+        if self.send_cbt:
+            host = urlparse(response.url).hostname
             # If we haven't tried, try getting it now
-            cbt_application_data = _get_channel_bindings_application_data(response)
-            if cbt_application_data:
-                # Only the latest version of pykerberos has this method available
-                try:
-                    self.cbt_struct = kerberos.channelBindings(application_data=cbt_application_data)
-                except AttributeError:
-                    # Using older version set to None
-                    self.cbt_struct = None
-            # Regardless of the result, set tried to True so we don't waste time next time
-            self.cbt_binding_tried = True
+            if host not in self._cbts:
+                cbt_application_data = _get_channel_bindings_application_data(response)
+                if cbt_application_data:
+                    # Only the latest version of pykerberos has this method available
+                    try:
+                        self._cbts[host] = kerberos.channelBindings(application_data=cbt_application_data)
+                    except AttributeError:
+                        # Using older version set to None
+                        self._cbts[host] = None
+                else:
+                    # Store None so we don't waste time next time
+                    self._cbts[host] = None
 
         if self.pos is not None:
             # Rewind the file position indicator of the body to where
